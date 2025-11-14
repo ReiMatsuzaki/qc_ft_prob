@@ -1,0 +1,12 @@
+[project]
+name = "qc-ft-prob"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.7",
+    "qulacs>=0.6.12",
+    "scipy>=1.16.2",
+]
