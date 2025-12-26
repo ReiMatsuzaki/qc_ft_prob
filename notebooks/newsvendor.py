@@ -839,7 +839,9 @@ def solve_newsvendor_qaoa(
         'ks': ks,
         'cs': cs,
         'c': c,
-        'lam': lam
+        'lam': lam,
+        'Q_max': Q_max,
+        'D_max': D_max
     }
 
 
@@ -1367,6 +1369,411 @@ def example_gaussian_demand():
     )
 
     return result
+
+
+def visualize_cost_from_result(result: Dict,
+                              figsize: Tuple[int, int] = (10, 6)) -> Dict:
+    """
+    QAOA計算結果からコスト関数を可視化する（ラッパー関数）。
+
+    Args:
+        result: solve_newsvendor_qaoaの戻り値
+        figsize: 図のサイズ
+
+    Returns:
+        辞書: 各qに対するコスト、最適解などの情報
+    """
+    return plot_cost_landscape(
+        demand_dist=result['demand_dist'],
+        c=result['c'],
+        lam=result['lam'],
+        Q_max=result['Q_max'],
+        D_max=result['D_max'],
+        figsize=figsize
+    )
+
+
+def plot_cost_landscape(demand_dist: Union[Dict[int, float], Callable],
+                       c: float, lam: float,
+                       Q_max: int, D_max: int,
+                       figsize: Tuple[int, int] = (10, 6)) -> Dict:
+    """
+    コスト関数 C(q) = c*q + λ*Pr(D>q) の曲線を描画する。
+
+    Args:
+        demand_dist: 需要分布（辞書形式または関数形式）
+        c: 単位発注コスト
+        lam: 欠品ペナルティ (λ)
+        Q_max: 最大発注量
+        D_max: 最大需要
+        figsize: 図のサイズ
+
+    Returns:
+        辞書: 各qに対するコスト、最適解などの情報
+    """
+    # 需要分布を辞書形式に変換
+    if callable(demand_dist):
+        # 連続関数の場合は離散化
+        demand_dist_dict = {}
+        for d in range(D_max + 1):
+            demand_dist_dict[d] = demand_dist(d)
+        # 正規化
+        total = sum(demand_dist_dict.values())
+        demand_dist_dict = {d: p/total for d, p in demand_dist_dict.items()}
+    else:
+        demand_dist_dict = normalize_demand_distribution(demand_dist)
+
+    # 各qに対してコストを計算
+    q_values = []
+    costs = []
+    order_costs = []
+    stockout_costs = []
+
+    for q in range(Q_max + 1):
+        stockout_prob = compute_stockout_prob(q, demand_dist_dict)
+        order_cost = c * q
+        stockout_cost = lam * stockout_prob
+        total_cost = order_cost + stockout_cost
+
+        q_values.append(q)
+        costs.append(total_cost)
+        order_costs.append(order_cost)
+        stockout_costs.append(stockout_cost)
+
+    # 最適解を見つける
+    optimal_idx = np.argmin(costs)
+    optimal_q = q_values[optimal_idx]
+    optimal_cost = costs[optimal_idx]
+
+    # プロット作成
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+
+    # 左: 総コスト
+    ax1.plot(q_values, costs, 'b-', linewidth=2, label='Total Cost')
+    ax1.plot(q_values, order_costs, 'g--', linewidth=1.5, alpha=0.7, label='Order Cost (c·q)')
+    ax1.plot(q_values, stockout_costs, 'r--', linewidth=1.5, alpha=0.7, label='Stockout Cost (λ·Pr(D>q))')
+    ax1.plot(optimal_q, optimal_cost, 'r*', markersize=20, label=f'Optimal (q={optimal_q})')
+    ax1.set_xlabel('Order Quantity q', fontsize=12)
+    ax1.set_ylabel('Cost', fontsize=12)
+    ax1.set_title(f'Cost Function Landscape\nc={c}, λ={lam}', fontsize=14, fontweight='bold')
+    ax1.legend(fontsize=10)
+    ax1.grid(True, alpha=0.3)
+
+    # 右: 需要分布
+    demand_q_vals = sorted(demand_dist_dict.keys())
+    demand_probs = [demand_dist_dict[d] for d in demand_q_vals]
+
+    ax2.bar(demand_q_vals, demand_probs, alpha=0.7, color='skyblue', edgecolor='navy')
+    ax2.axvline(x=optimal_q, color='red', linestyle='--', linewidth=2,
+                label=f'Optimal q={optimal_q}')
+    ax2.set_xlabel('Demand d', fontsize=12)
+    ax2.set_ylabel('Probability', fontsize=12)
+    ax2.set_title('Demand Distribution', fontsize=14, fontweight='bold')
+    ax2.legend(fontsize=10)
+    ax2.grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig('cost_landscape.png', dpi=150, bbox_inches='tight')
+    print("\nCost landscape plot saved to: cost_landscape.png")
+    plt.show()
+
+    # 結果をまとめる
+    result = {
+        'q_values': q_values,
+        'costs': costs,
+        'order_costs': order_costs,
+        'stockout_costs': stockout_costs,
+        'optimal_q': optimal_q,
+        'optimal_cost': optimal_cost,
+        'demand_dist': demand_dist_dict
+    }
+
+    # 統計情報を表示
+    print("\n" + "=" * 60)
+    print("COST FUNCTION ANALYSIS")
+    print("=" * 60)
+    print(f"Parameters: c={c}, λ={lam}")
+    print(f"Range: q ∈ [0, {Q_max}], d ∈ [0, {D_max}]")
+    print(f"\nOptimal Solution:")
+    print(f"  q* = {optimal_q}")
+    print(f"  C(q*) = {optimal_cost:.4f}")
+    print(f"    Order cost: {order_costs[optimal_idx]:.4f}")
+    print(f"    Stockout cost: {stockout_costs[optimal_idx]:.4f}")
+    print(f"\nCost at boundaries:")
+    print(f"  C(0) = {costs[0]:.4f} (all stockout)")
+    print(f"  C({Q_max}) = {costs[-1]:.4f} (all order)")
+    print("=" * 60)
+
+    return result
+
+
+def _draw_circuit_matplotlib(circuit: QuantumCircuit,
+                            n_qubits: int,
+                            n_gates: int,
+                            n_q: int,
+                            n_d: int,
+                            max_display_gates: int = 100):
+    """
+    matplotlibで量子回路を描画する（内部関数）。
+
+    Args:
+        circuit: 描画する回路
+        n_qubits: 総qubit数
+        n_gates: 総ゲート数
+        n_q: 発注量レジスタのqubit数
+        n_d: 需要レジスタのqubit数
+        max_display_gates: 表示する最大ゲート数
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+
+    # 表示するゲート数を制限
+    n_display = min(n_gates, max_display_gates)
+    if n_gates > max_display_gates:
+        print(f"  Note: Showing first {max_display_gates} of {n_gates} gates")
+
+    # ゲート情報を収集
+    gate_info = []
+    for i in range(n_display):
+        gate = circuit.get_gate(i)
+        gate_name = gate.get_name()
+        target_list = gate.get_target_index_list()
+        control_list = gate.get_control_index_list()
+
+        gate_info.append({
+            'index': i,
+            'name': gate_name,
+            'targets': target_list,
+            'controls': control_list
+        })
+
+    # 図の作成
+    fig, ax = plt.subplots(figsize=(min(20, max(12, n_display * 0.3)), max(8, n_qubits * 0.6)))
+
+    # qubit線を描画
+    for q in range(n_qubits):
+        ax.plot([0, n_display + 1], [q, q], 'k-', linewidth=1, alpha=0.3)
+
+        # qubit ラベル
+        label = f'q[{q}]'
+        if q < n_q:
+            label += ' (R_q)'
+        elif q < n_q + n_d:
+            label += ' (R_d)'
+        elif q == n_q + n_d:
+            label += ' (R_f)'
+        else:
+            label += ' (anc)'
+
+        ax.text(-0.5, q, label, ha='right', va='center', fontsize=9)
+
+    # ゲートを描画
+    gate_positions = {}  # 各qubitでの次の描画位置
+    for q in range(n_qubits):
+        gate_positions[q] = 1
+
+    for gate_data in gate_info:
+        targets = gate_data['targets']
+        controls = gate_data['controls']
+        gate_name = gate_data['name']
+
+        # このゲートが使用するすべてのqubit
+        all_qubits = list(targets) + list(controls)
+        if not all_qubits:
+            continue
+
+        # 描画位置を決定（すべての関連qubitで最も右の位置）
+        x_pos = max([gate_positions[q] for q in all_qubits])
+
+        # 制御qubitを描画
+        for ctrl in controls:
+            ax.plot(x_pos, ctrl, 'ko', markersize=8, markerfacecolor='black')
+
+        # ターゲットqubitを描画
+        if len(targets) == 1:
+            # 単一qubitゲート
+            target = targets[0]
+            color = 'lightblue'
+            if 'X' in gate_name or 'NOT' in gate_name:
+                color = 'lightcoral'
+            elif 'Z' in gate_name or 'Phase' in gate_name:
+                color = 'lightgreen'
+            elif 'H' in gate_name or 'Hadamard' in gate_name:
+                color = 'lightyellow'
+
+            rect = patches.Rectangle((x_pos - 0.15, target - 0.2),
+                                     0.3, 0.4,
+                                     linewidth=1.5, edgecolor='black',
+                                     facecolor=color, alpha=0.7)
+            ax.add_patch(rect)
+
+            # ゲート名を簡略化
+            display_name = gate_name.replace('-rotation', '').replace('DenseMatrix', 'U')
+            if len(display_name) > 6:
+                display_name = display_name[:6]
+
+            ax.text(x_pos, target, display_name, ha='center', va='center',
+                   fontsize=7, fontweight='bold')
+
+        elif len(targets) == 2:
+            # 2qubitゲート（CNOT, CZなど）
+            t0, t1 = targets[0], targets[1]
+            ax.plot([x_pos, x_pos], [min(t0, t1), max(t0, t1)],
+                   'k-', linewidth=2)
+
+            for t in targets:
+                ax.plot(x_pos, t, 'o', markersize=10,
+                       markerfacecolor='lightcoral',
+                       markeredgecolor='black', markeredgewidth=1.5)
+
+        # 制御線を描画
+        if controls and targets:
+            min_q = min(min(controls), min(targets))
+            max_q = max(max(controls), max(targets))
+            ax.plot([x_pos, x_pos], [min_q, max_q],
+                   'k--', linewidth=1.5, alpha=0.5)
+
+        # 次の描画位置を更新
+        for q in all_qubits:
+            gate_positions[q] = x_pos + 1
+
+    # 軸の設定
+    ax.set_xlim(-1, n_display + 2)
+    ax.set_ylim(-0.5, n_qubits - 0.5)
+    ax.set_yticks(range(n_qubits))
+    ax.set_yticklabels([])
+    ax.set_xlabel('Gate Sequence', fontsize=12)
+    ax.set_title(f'QAOA Circuit Diagram ({n_display} gates shown)', fontsize=14, fontweight='bold')
+    ax.invert_yaxis()  # qubit 0を上に
+    ax.set_aspect('auto')
+
+    # グリッドを削除
+    ax.grid(False)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+
+    plt.tight_layout()
+    plt.savefig('qaoa_circuit_diagram.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+
+def visualize_circuit_from_result(result: Dict,
+                                 show_gates: bool = True,
+                                 max_gates: int = 100) -> QuantumCircuit:
+    """
+    QAOA計算結果から量子回路を可視化する（ラッパー関数）。
+
+    Args:
+        result: solve_newsvendor_qaoaの戻り値
+        show_gates: ゲートリストを表示するかどうか
+        max_gates: 表示する最大ゲート数
+
+    Returns:
+        QuantumCircuit: 構築された回路
+    """
+    # resultから必要なパラメータを抽出
+    optimal_params = result['optimal_params']
+    p = result['p']
+    gammas = optimal_params[:p]
+    betas = optimal_params[p:]
+
+    return draw_qaoa_circuit(
+        gammas=gammas,
+        betas=betas,
+        n_q=result['n_q'],
+        n_d=result['n_d'],
+        ks=result['ks'],
+        cs=result['cs'],
+        c=result['c'],
+        lam=result['lam'],
+        Q_max=result['Q_max'],
+        D_max=result['D_max'],
+        show_gates=show_gates,
+        max_gates=max_gates
+    )
+
+
+def draw_qaoa_circuit(gammas: list, betas: list,
+                     n_q: int, n_d: int,
+                     ks: np.ndarray, cs: np.ndarray,
+                     c: float, lam: float,
+                     Q_max: int, D_max: int,
+                     show_gates: bool = True,
+                     max_gates: int = 100) -> QuantumCircuit:
+    """
+    QAOAで使用する量子回路を構築して可視化する。
+
+    Args:
+        gammas: QAOA cost parameters [γ_1, ..., γ_p]
+        betas: QAOA mixer parameters [β_1, ..., β_p]
+        n_q: 発注量レジスタのqubit数
+        n_d: 需要レジスタのqubit数
+        ks: フーリエ係数のモード
+        cs: フーリエ係数の値
+        c: 単位発注コスト
+        lam: 欠品ペナルティ
+        Q_max: 最大発注量
+        D_max: 最大需要
+        show_gates: ゲートリストを表示するかどうか
+        max_gates: 表示する最大ゲート数
+
+    Returns:
+        QuantumCircuit: 構築された回路
+    """
+    print("=" * 70)
+    print("QAOA CIRCUIT STRUCTURE")
+    print("=" * 70)
+
+    # 回路を構築
+    circuit = build_full_qaoa_circuit(
+        gammas, betas, n_q, n_d, ks, cs, c, lam, Q_max, D_max
+    )
+
+    # 回路の統計情報
+    n_qubits = circuit.get_qubit_count()
+    n_gates = circuit.get_gate_count()
+    p = len(gammas)
+
+    print(f"\nCircuit Parameters:")
+    print(f"  QAOA depth (p): {p}")
+    print(f"  Total qubits: {n_qubits}")
+    print(f"  Total gates: {n_gates}")
+    print(f"  Estimated depth: {estimate_circuit_depth(n_q, n_d, p)}")
+
+    print(f"\nRegister Layout:")
+    print(f"  R_q (order quantity): qubits 0-{n_q-1} ({n_q} qubits)")
+    print(f"  R_d (demand): qubits {n_q}-{n_q+n_d-1} ({n_d} qubits)")
+    print(f"  R_f (stockout flag): qubit {n_q+n_d}")
+    print(f"  Ancilla: qubits {n_q+n_d+1}+")
+
+    print(f"\nQAOA Parameters:")
+    for i in range(p):
+        print(f"  Layer {i+1}: γ={gammas[i]:.4f}, β={betas[i]:.4f}")
+
+    # ゲートの種類を集計
+    if show_gates:
+        gate_types = {}
+        for i in range(min(n_gates, max_gates)):
+            gate = circuit.get_gate(i)
+            gate_name = gate.get_name()
+            gate_types[gate_name] = gate_types.get(gate_name, 0) + 1
+
+        print(f"\nGate Composition (first {min(n_gates, max_gates)} gates):")
+        for gate_name, count in sorted(gate_types.items(), key=lambda x: x[1], reverse=True):
+            print(f"  {gate_name}: {count}")
+
+        if n_gates > max_gates:
+            print(f"  ... ({n_gates - max_gates} more gates not shown)")
+
+    # matplotlibで回路図を描画
+    print(f"\nDrawing circuit diagram with matplotlib...")
+    _draw_circuit_matplotlib(circuit, n_qubits, n_gates, n_q, n_d, max_display_gates=max_gates)
+    print("  Circuit diagram saved to: qaoa_circuit_diagram.png")
+
+    print("=" * 70)
+
+    return circuit
 
 
 if __name__ == "__main__":
