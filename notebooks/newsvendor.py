@@ -573,7 +573,7 @@ def build_demand_state_circuit(ks, cs, n_d: int, reg_d_offset: int = 0) -> Quant
     complete_circuit = QuantumCircuit(n_qubits)
 
     # Step 1: FSL circuit (encodes in Fourier space)
-    fsl_circuit, meta = build_Uc_circuit_from_ck_cascade(ks, cs, m=m)
+    fsl_circuit, meta = build_Uc_circuit_from_ck_cascade(ks, cs, m=m_fsl)
     complete_circuit.merge_circuit(fsl_circuit)
 
     # Step 2: IQFT to transform to computational basis (probability distribution)
