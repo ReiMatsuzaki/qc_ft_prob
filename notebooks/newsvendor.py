@@ -275,9 +275,246 @@ def encode_demand_distribution(demand_dist: Union[Dict[int, float], Callable],
     return ks, cs, meta
 
 
-def remap_circuit_qubits(circuit: QuantumCircuit, offset: int) -> QuantumCircuit:
+def remap_circuit_qubits(circuit: QuantumCircuit, offset: int) -> list:
     """
     Shift all qubit indices in circuit by offset.
+
+    Args:
+        circuit: Original circuit
+        offset: Qubit index offset
+
+    Returns:
+        List of gates with shifted qubit indices
+
+    Note: Returns a list of gates rather than a new circuit,
+          to be added to an existing circuit.
+    """
+    from qulacs.gate import (
+        Identity, X, Y, Z, H, S, Sdag, T, Tdag,
+        RX, RY, RZ, U1, U2, U3,
+        CNOT, CZ, SWAP,
+        to_matrix_gate, DenseMatrix
+    )
+
+    remapped_gates = []
+
+    for i in range(circuit.get_gate_count()):
+        gate = circuit.get_gate(i)
+        gate_name = gate.get_name()
+
+        # Get original target and control indices
+        targets = list(gate.get_target_index_list())
+        controls = list(gate.get_control_index_list())
+
+        # Shift indices by offset
+        new_targets = [t + offset for t in targets]
+        new_controls = [c + offset for c in controls]
+
+        # Reconstruct gate with new indices
+        # For most gates, we can use to_matrix_gate to preserve the operation
+        if len(new_targets) == 1 and len(new_controls) == 0:
+            # Single qubit gate without control
+            target = new_targets[0]
+
+            # Try to recreate specific gate types
+            if 'H' in gate_name or 'Hadamard' in gate_name:
+                remapped_gates.append(H(target))
+            elif 'X' == gate_name or 'Pauli-X' in gate_name:
+                remapped_gates.append(X(target))
+            elif 'Y' == gate_name or 'Pauli-Y' in gate_name:
+                remapped_gates.append(Y(target))
+            elif 'Z' == gate_name or 'Pauli-Z' in gate_name:
+                remapped_gates.append(Z(target))
+            elif 'S' in gate_name:
+                remapped_gates.append(S(target))
+            elif 'T' in gate_name:
+                remapped_gates.append(T(target))
+            elif 'X-rotation' in gate_name or 'RX' in gate_name:
+                # Get rotation angle from gate matrix
+                mat = gate.get_matrix()
+                # For RX gate: extract angle (this is approximate)
+                # In practice, should store angle separately
+                # For now, use DenseMatrix
+                new_gate = DenseMatrix(target, mat)
+                remapped_gates.append(new_gate)
+            elif 'Y-rotation' in gate_name or 'RY' in gate_name:
+                mat = gate.get_matrix()
+                new_gate = DenseMatrix(target, mat)
+                remapped_gates.append(new_gate)
+            elif 'Z-rotation' in gate_name or 'RZ' in gate_name:
+                mat = gate.get_matrix()
+                new_gate = DenseMatrix(target, mat)
+                remapped_gates.append(new_gate)
+            else:
+                # Generic single-qubit gate
+                mat = gate.get_matrix()
+                new_gate = DenseMatrix(target, mat)
+                remapped_gates.append(new_gate)
+
+        elif len(new_targets) == 2 and len(new_controls) == 0:
+            # Two-qubit gate without explicit control
+            t0, t1 = new_targets[0], new_targets[1]
+
+            if 'CNOT' in gate_name:
+                remapped_gates.append(CNOT(t0, t1))
+            elif 'CZ' in gate_name:
+                remapped_gates.append(CZ(t0, t1))
+            elif 'SWAP' in gate_name:
+                remapped_gates.append(SWAP(t0, t1))
+            else:
+                # Generic two-qubit gate
+                mat = gate.get_matrix()
+                new_gate = DenseMatrix([t0, t1], mat)
+                remapped_gates.append(new_gate)
+
+        elif len(new_controls) > 0:
+            # Controlled gate
+            mat = gate.get_matrix()
+            control_indices = new_controls
+            target_indices = new_targets
+
+            # Create controlled gate using DenseMatrix
+            all_indices = control_indices + target_indices
+            new_gate = to_matrix_gate(mat).add_control_qubit(control_indices[0], 1)
+            for ctrl in control_indices[1:]:
+                new_gate = new_gate.add_control_qubit(ctrl, 1)
+            # Set target
+            for t in target_indices:
+                new_gate.set_target_index([t])
+
+            # Fallback: use DenseMatrix on all qubits
+            new_gate = DenseMatrix(all_indices, mat)
+            remapped_gates.append(new_gate)
+        else:
+            # Fallback for any other gate type
+            mat = gate.get_matrix()
+            all_indices = new_targets + new_controls
+            new_gate = DenseMatrix(all_indices, mat)
+            remapped_gates.append(new_gate)
+
+    return remapped_gates
+
+
+def _simple_remap_gates(circuit: QuantumCircuit, offset: int) -> list:
+    """
+    Simplified gate remapping by recreating gates with shifted indices.
+
+    Args:
+        circuit: Original circuit
+        offset: Qubit index offset
+
+    Returns:
+        List of remapped gates
+    """
+    from qulacs.gate import (
+        H, X, Y, Z, S, T,
+        RX, RY, RZ,
+        CNOT, CZ, SWAP,
+        DenseMatrix
+    )
+
+    remapped_gates = []
+
+    for i in range(circuit.get_gate_count()):
+        gate = circuit.get_gate(i)
+        gate_name = gate.get_name()
+        targets = list(gate.get_target_index_list())
+        controls = list(gate.get_control_index_list())
+
+        # Shift all indices
+        new_targets = [t + offset for t in targets]
+        new_controls = [c + offset for c in controls]
+
+        # Handle specific gate types
+        try:
+            if len(controls) == 0:
+                # Non-controlled gates
+                if len(new_targets) == 1:
+                    t = new_targets[0]
+                    # Single-qubit gates
+                    if 'H' in gate_name or 'Hadamard' in gate_name:
+                        remapped_gates.append(H(t))
+                    elif gate_name == 'X' or 'Pauli-X' in gate_name:
+                        remapped_gates.append(X(t))
+                    elif gate_name == 'Y' or 'Pauli-Y' in gate_name:
+                        remapped_gates.append(Y(t))
+                    elif gate_name == 'Z' or 'Pauli-Z' in gate_name:
+                        remapped_gates.append(Z(t))
+                    else:
+                        # Generic single-qubit gate
+                        mat = gate.get_matrix()
+                        remapped_gates.append(DenseMatrix(t, mat))
+                elif len(new_targets) == 2:
+                    t0, t1 = new_targets
+                    # Two-qubit gates
+                    if 'CNOT' in gate_name:
+                        remapped_gates.append(CNOT(t0, t1))
+                    elif 'CZ' in gate_name:
+                        remapped_gates.append(CZ(t0, t1))
+                    elif 'SWAP' in gate_name:
+                        remapped_gates.append(SWAP(t0, t1))
+                    else:
+                        # Generic two-qubit gate
+                        mat = gate.get_matrix()
+                        remapped_gates.append(DenseMatrix([t0, t1], mat))
+                else:
+                    # Multi-qubit gate - use DenseMatrix
+                    mat = gate.get_matrix()
+                    remapped_gates.append(DenseMatrix(new_targets, mat))
+            else:
+                # Controlled gates - create gate on targets then add control
+                mat = gate.get_matrix()
+
+                # Create base gate on targets
+                if len(new_targets) == 1:
+                    base_gate = DenseMatrix(new_targets[0], mat)
+                else:
+                    base_gate = DenseMatrix(new_targets, mat)
+
+                # Try to add control qubits
+                try:
+                    from qulacs.gate import to_matrix_gate
+                    matrix_gate = to_matrix_gate(base_gate)
+
+                    if matrix_gate is not None:
+                        # Try to add all control qubits
+                        all_success = True
+                        for ctrl_idx in new_controls:
+                            result = matrix_gate.add_control_qubit(ctrl_idx, 1)
+                            if result is None:
+                                all_success = False
+                                break
+                            matrix_gate = result
+
+                        if all_success:
+                            remapped_gates.append(matrix_gate)
+                        else:
+                            # add_control_qubit failed - use fallback
+                            remapped_gates.append(base_gate)
+                    else:
+                        # to_matrix_gate returned None - use fallback
+                        remapped_gates.append(base_gate)
+                except (AttributeError, TypeError, ValueError):
+                    # Any error in control gate processing - fallback to base gate
+                    remapped_gates.append(base_gate)
+        except Exception as e:
+            # Fallback: for failed gates, just use DenseMatrix on targets
+            print(f"Warning: Failed to remap gate {gate_name}: {e}")
+            mat = gate.get_matrix()
+            if len(new_targets) == 1:
+                remapped_gates.append(DenseMatrix(new_targets[0], mat))
+            elif len(new_targets) > 1:
+                remapped_gates.append(DenseMatrix(new_targets, mat))
+            else:
+                # Skip gate if no targets
+                pass
+
+    return remapped_gates
+
+
+def remap_circuit_qubits_old(circuit: QuantumCircuit, offset: int) -> QuantumCircuit:
+    """
+    OLD VERSION - Shift all qubit indices in circuit by offset.
 
     Args:
         circuit: Original circuit
@@ -303,22 +540,23 @@ def remap_circuit_qubits(circuit: QuantumCircuit, offset: int) -> QuantumCircuit
     return circuit  # Placeholder - needs proper implementation
 
 
-def build_demand_state_circuit(ks, cs, n_d: int, reg_d_offset: int) -> QuantumCircuit:
+def build_demand_state_circuit(ks, cs, n_d: int, reg_d_offset: int = 0) -> QuantumCircuit:
     """
-    Build FSL circuit for demand distribution on R_d register.
+    Build FSL circuit for demand distribution.
 
     Args:
         ks: Fourier mode indices
         cs: Fourier coefficients
         n_d: Number of qubits in demand register
-        reg_d_offset: Starting index of R_d
+        reg_d_offset: Starting index (default 0, offset handled by caller)
 
     Returns:
-        FSL circuit for demand state preparation (FSL + IQFT)
+        FSL circuit for demand state preparation (FSL + IQFT), starting from qubit 0
 
     Note:
-        FSL encodes the distribution in Fourier space.
-        IQFT is needed to transform it back to computational basis (probability distribution).
+        - FSL encodes the distribution in Fourier space.
+        - IQFT transforms it back to computational basis (probability distribution).
+        - The returned circuit starts from qubit 0. Caller should remap if needed.
     """
     # FSL needs enough qubits to accommodate Fourier modes
     # For modes -M to +M, need dimension >= 2M+1
@@ -457,29 +695,28 @@ def build_full_qaoa_circuit(gammas: np.ndarray, betas: np.ndarray,
     """
     p = len(gammas)
 
-    # Register layout
-    reg_q_offset = 0
-    reg_d_offset = n_q
-    reg_f = n_q + n_d
-    ancilla_offset = n_q + n_d + 1
-    n_ancilla = max(n_q, n_d)  # For comparator
-    total_qubits = n_q + n_d + 1 + n_ancilla
+    # Register layout (R_d first so FSL can be applied directly without remapping)
+    reg_d_offset = 0            # R_d: demand (qubits 0 to n_d-1)
+    reg_q_offset = n_d          # R_q: order quantity (qubits n_d to n_d+n_q-1)
+    reg_f = n_d + n_q           # R_f: stockout flag
+    ancilla_offset = n_d + n_q + 1  # Ancilla qubits
+    n_ancilla = max(n_q, n_d)   # For comparator
+    total_qubits = n_d + n_q + 1 + n_ancilla
 
     circuit = QuantumCircuit(total_qubits)
 
-    # 1. Initialize R_q: Uniform superposition over all q values
-    for j in range(n_q):
-        circuit.add_gate(H(reg_q_offset + j))
+    # 1. FSL for demand distribution (applied to R_d at qubits 0 to n_d-1)
+    # Build FSL circuit - no remapping needed since R_d starts at qubit 0
+    fsl_circuit = build_demand_state_circuit(ks, cs, n_d, 0)
 
-    # 2. FSL for demand distribution (once at beginning)
-    fsl_circuit = build_demand_state_circuit(ks, cs, n_d, reg_d_offset)
-    # Merge FSL circuit
-    # Note: Need to handle qubit offset properly
+    # Add FSL gates directly to main circuit (no remapping needed)
     for i in range(fsl_circuit.get_gate_count()):
         gate = fsl_circuit.get_gate(i)
-        # Shift gate targets by reg_d_offset
-        # This is simplified - needs proper implementation
         circuit.add_gate(gate)
+
+    # 2. Initialize R_q: Uniform superposition over all q values
+    for j in range(n_q):
+        circuit.add_gate(H(reg_q_offset + j))
 
     # 3. Apply p QAOA layers
     for layer_idx in range(p):
@@ -639,9 +876,10 @@ def optimize_qaoa_parameters(p: int, initial_params: np.ndarray,
             gammas, betas, n_q, n_d, ks, cs, c, lam, Q_max, D_max
         )
 
-        # Measure and get q distribution
+        # Measure and get q distribution (R_q is now at offset n_d)
+        reg_q_offset = n_d  # NEW layout: R_d first, then R_q
         result = measure_and_extract_solution(
-            circuit, n_q, 0, Q_max, n_shots
+            circuit, n_q, reg_q_offset, Q_max, n_shots
         )
 
         # Compute expected cost
@@ -793,8 +1031,10 @@ def solve_newsvendor_qaoa(
         gammas, betas, n_q, n_d, ks, cs, c, lam, Q_max, D_max
     )
 
+    # Measure R_q register (now at offset n_d due to new layout)
+    reg_q_offset = n_d  # NEW layout: R_d first, then R_q
     solution = measure_and_extract_solution(
-        final_circuit, n_q, 0, Q_max, n_shots=10000
+        final_circuit, n_q, reg_q_offset, Q_max, n_shots=10000
     )
 
     # 5. Classical verification
@@ -1061,10 +1301,10 @@ def visualize_circuit_structure(result: Dict, show_full: bool = False):
     print(f"  QAOA layers (p): {p}")
 
     print(f"\nRegister Layout:")
-    print(f"  R_q (order quantity): qubits 0-{n_q-1} ({n_q} qubits)")
-    print(f"  R_d (demand): qubits {n_q}-{n_q+n_d-1} ({n_d} qubits)")
-    print(f"  R_f (stockout flag): qubit {n_q+n_d}")
-    print(f"  Ancilla: qubits {n_q+n_d+1}+")
+    print(f"  R_d (demand): qubits 0-{n_d-1} ({n_d} qubits)")
+    print(f"  R_q (order quantity): qubits {n_d}-{n_d+n_q-1} ({n_q} qubits)")
+    print(f"  R_f (stockout flag): qubit {n_d+n_q}")
+    print(f"  Ancilla: qubits {n_d+n_q+1}+")
 
     # Gate type analysis
     print(f"\nGate Composition:")
@@ -1554,13 +1794,13 @@ def _draw_circuit_matplotlib(circuit: QuantumCircuit,
     for q in range(n_qubits):
         ax.plot([0, n_display + 1], [q, q], 'k-', linewidth=1, alpha=0.3)
 
-        # qubit ラベル
+        # qubit ラベル (NEW layout: R_d first)
         label = f'q[{q}]'
-        if q < n_q:
-            label += ' (R_q)'
-        elif q < n_q + n_d:
+        if q < n_d:
             label += ' (R_d)'
-        elif q == n_q + n_d:
+        elif q < n_d + n_q:
+            label += ' (R_q)'
+        elif q == n_d + n_q:
             label += ' (R_f)'
         else:
             label += ' (anc)'
@@ -1742,10 +1982,10 @@ def draw_qaoa_circuit(gammas: list, betas: list,
     print(f"  Estimated depth: {estimate_circuit_depth(n_q, n_d, p)}")
 
     print(f"\nRegister Layout:")
-    print(f"  R_q (order quantity): qubits 0-{n_q-1} ({n_q} qubits)")
-    print(f"  R_d (demand): qubits {n_q}-{n_q+n_d-1} ({n_d} qubits)")
-    print(f"  R_f (stockout flag): qubit {n_q+n_d}")
-    print(f"  Ancilla: qubits {n_q+n_d+1}+")
+    print(f"  R_d (demand): qubits 0-{n_d-1} ({n_d} qubits)")
+    print(f"  R_q (order quantity): qubits {n_d}-{n_d+n_q-1} ({n_q} qubits)")
+    print(f"  R_f (stockout flag): qubit {n_d+n_q}")
+    print(f"  Ancilla: qubits {n_d+n_q+1}+")
 
     print(f"\nQAOA Parameters:")
     for i in range(p):
