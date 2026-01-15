@@ -566,8 +566,10 @@ def build_demand_state_circuit(ks, cs, n_d: int, reg_d_offset: int = 0) -> Quant
     m_fsl = int(np.ceil(np.log2(min_dim))) - 1
 
     # Use the larger of n_d-1 and m_fsl
-    m = max(n_d - 1, m_fsl)
-    n_qubits = m + 1
+    # m = max(n_d - 1, m_fsl)
+    m = m_fsl
+    # n_qubits = m + 1
+    n_qubits = n_d
 
     # Build complete circuit: FSL + IQFT
     complete_circuit = QuantumCircuit(n_qubits)
@@ -576,7 +578,14 @@ def build_demand_state_circuit(ks, cs, n_d: int, reg_d_offset: int = 0) -> Quant
     fsl_circuit, meta = build_Uc_circuit_from_ck_cascade(ks, cs, m=m_fsl)
     complete_circuit.merge_circuit(fsl_circuit)
 
-    # Step 2: IQFT to transform to computational basis (probability distribution)
+    # Step 2: CNOT
+    print("cnot!", M, m, n_qubits)
+    control = m
+    for target in range(m+1, n_qubits):
+        complete_circuit.add_gate(CNOT(control, target))
+
+
+    # Step 3: IQFT to transform to computational basis (probability distribution)
     iqft = iqft_circuit(n_qubits)
     complete_circuit.merge_circuit(iqft)
 
@@ -1365,7 +1374,14 @@ def analyze_fsl_encoding(ks, cs, demand_dist: Dict[int, float],
     M = max(abs(k) for k in ks)
     min_dim = 2 * M + 1
     m = int(np.ceil(np.log2(min_dim))) - 1
-    n_qubits = m + 1
+    n_qubits = m + 2
+
+   # Use the larger of n_d-1 and m_fsl
+    # m = max(n_d - 1, m_fsl)
+    # m = m_fsl
+    # n_qubits = m + 1
+    # n_qubits = n_d
+
 
     # Create complete circuit: FSL + IQFT
     complete_circuit = QuantumCircuit(n_qubits)
@@ -1374,7 +1390,13 @@ def analyze_fsl_encoding(ks, cs, demand_dist: Dict[int, float],
     fsl_circuit, meta = build_Uc_circuit_from_ck_cascade(ks, cs, m=m)
     complete_circuit.merge_circuit(fsl_circuit)
 
-    # Step 2: IQFT (to convert from Fourier space to probability distribution)
+    # Step 2: CNOT
+    print("CNOT(analyze_fsl_encoding)", m, n_qubits)
+    control = m
+    for target in range(m+1, n_qubits):
+        complete_circuit.add_gate(CNOT(control, target))
+
+    # Step 3: IQFT (to convert from Fourier space to probability distribution)
     iqft = iqft_circuit(n_qubits)
     complete_circuit.merge_circuit(iqft)
 
